@@ -1,0 +1,5 @@
+data_analytics/requirements.txt
+Python dependencies for the Real-Time Data Analytics module.
+The official Python client for Apache Kafka
+
+kafka-python>=2.0.2
