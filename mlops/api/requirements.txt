@@ -1,6 +1,4 @@
 mlops/api/requirements.txt
-Python dependencies for the MLOps API and Training script.
-Use 'pip install -r requirements.txt' to install them.
 For the ML framework and tracking
 
 mlflow>=1.20.0
@@ -12,7 +10,16 @@ uvicorn>=0.15.0
 For data manipulation
 
 numpy>=1.20.0
-Pydantic is a dependency of FastAPI, but it's good practice
-to specify it for clarity.
+Pydantic is a dependency of FastAPI
 
 pydantic>=1.9.0
+--- NEW: Dependencies for Security (OAuth2 & JWT) ---
+For handling JSON Web Tokens (JWT)
+
+python-jose[cryptography]>=3.3.0
+For hashing passwords
+
+passlib[bcrypt]>=1.7.4
+For handling form data required by OAuth2
+
+python-multipart>=0.0.5
