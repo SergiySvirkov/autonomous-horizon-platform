@@ -1,0 +1,8 @@
+data_analytics/bridge/requirements.txt
+Dependencies for the Kafka-to-WebSocket bridge.
+Python client for Apache Kafka
+
+kafka-python>=2.0.2
+Library for building WebSocket clients and servers
+
+websockets>=10.0
