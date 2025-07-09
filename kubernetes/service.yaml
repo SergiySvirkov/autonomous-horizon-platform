@@ -1,0 +1,22 @@
+# kubernetes/service.yaml
+# This file defines how to expose our MLOps API deployment to network traffic.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlops-api-service
+spec:
+  # 'LoadBalancer' type exposes the service externally using a cloud provider's load balancer.
+  # This is the easiest way to get external traffic into your service.
+  # Other types include 'ClusterIP' (internal only) and 'NodePort'.
+  type: LoadBalancer
+  selector:
+    # This selector must match the labels of the pods in the deployment.
+    # This is how the service knows which pods to send traffic to.
+    app: mlops-api
+  ports:
+    - protocol: TCP
+      # The port that the external load balancer will listen on.
+      port: 80
+      # The port on the pods that traffic should be forwarded to.
+      targetPort: 80
