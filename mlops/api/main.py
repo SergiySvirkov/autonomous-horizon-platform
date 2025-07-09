@@ -1,84 +1,134 @@
 # mlops/api/main.py
-
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+from datetime import datetime, timedelta
 import mlflow
 import numpy as np
 import os
 
-# --- Configuration ---
-# For a prototype, we'll set the run ID directly.
-# In a production system, this would be managed by a CI/CD pipeline,
-# which would fetch the latest "production-ready" model from the MLflow Model Registry.
-#
-# IMPORTANT: Replace "<YOUR_RUN_ID>" with the actual run_id from your training script output.
-RUN_ID = os.environ.get("MLFLOW_RUN_ID", "<YOUR_RUN_ID>") 
-MODEL_ARTIFACT_PATH = "model"
-MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "mlruns") # Assumes local `mlruns` directory
+# --- Security Configuration ---
+# This should be a long, random string. Load from environment variables in production.
+SECRET_KEY = os.environ.get("SECRET_KEY", "a_very_secret_key_for_dev")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-# --- Pydantic Model for Input Validation ---
-# This ensures that the data sent to the /predict endpoint has the correct structure.
-# Our model expects 10 features.
+# Password hashing context
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# OAuth2 scheme
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+# --- Mock User Database ---
+# In a real application, this would be a real database.
+fake_users_db = {
+    "testuser": {
+        "username": "testuser",
+        "full_name": "Test User",
+        "email": "test@example.com",
+        "hashed_password": pwd_context.hash("secret"), # Hashed password for 'secret'
+        "disabled": False,
+    }
+}
+
+# --- Pydantic Models ---
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class TokenData(BaseModel):
+    username: str | None = None
+
+class User(BaseModel):
+    username: str
+    email: str | None = None
+    full_name: str | None = None
+    disabled: bool | None = None
+
 class PredictionInput(BaseModel):
     features: list[list[float]]
 
-# --- FastAPI Application ---
-app = FastAPI(
-    title="Autonomous Vehicle Classifier API",
-    description="An API to serve predictions from an MLflow-trained model.",
-    version="0.1.0"
-)
+# --- Security Helper Functions ---
+def get_user(db, username: str):
+    if username in db:
+        return User(**db[username])
 
-# --- Model Loading ---
-# We load the model once when the application starts.
+def create_access_token(data: dict, expires_delta: timedelta | None = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+async def get_current_active_user(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+        token_data = TokenData(username=username)
+    except JWTError:
+        raise credentials_exception
+    user = get_user(fake_users_db, username=token_data.username)
+    if user is None or user.disabled:
+        raise credentials_exception
+    return user
+
+# --- FastAPI Application ---
+app = FastAPI(title="Secure Autonomous Vehicle Classifier API")
+
+# --- Model Loading (same as before) ---
+RUN_ID = os.environ.get("MLFLOW_RUN_ID", "<YOUR_RUN_ID>")
+model = None
 try:
-    # Construct the full model URI
-    logged_model_uri = f'runs:/{RUN_ID}/{MODEL_ARTIFACT_PATH}'
-    print(f"Loading model from: {logged_model_uri}")
-    
-    # Set the tracking URI for MLflow
-    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-    
-    # Load the model using MLflow's pyfunc loader
+    logged_model_uri = f'runs:/{RUN_ID}/model'
     model = mlflow.pyfunc.load_model(logged_model_uri)
-    print("Model loaded successfully.")
 except Exception as e:
-    print(f"Error loading the model: {e}")
-    # If the model fails to load, we assign None and the API will return an error.
+    print(f"Error loading model: {e}")
     model = None
-    
+
 # --- API Endpoints ---
+@app.post("/token", response_model=Token)
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
+    """Endpoint to get an access token."""
+    user = get_user(fake_users_db, form_data.username)
+    if not user or not pwd_context.verify(form_data.password, fake_users_db[user.username]['hashed_password']):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.username}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
 @app.get("/")
 def read_root():
-    """A simple endpoint to check if the API is running."""
     return {"status": "ok", "message": "MLOps API is running."}
 
 @app.post("/predict")
-async def predict(input_data: PredictionInput):
-    """
-    Endpoint to get predictions from the model.
-    
-    - **input_data**: A JSON object with a 'features' key.
-      'features' should be a list of lists (e.g., [[feature1, feature2, ...], ...]).
-    """
+async def predict(
+    input_data: PredictionInput,
+    current_user: User = Depends(get_current_active_user) # This dependency protects the endpoint
+):
+    """Endpoint to get predictions. Requires authentication."""
     if model is None:
-        raise HTTPException(
-            status_code=503, 
-            detail="Model is not available. Please check the server logs."
-        )
-
+        raise HTTPException(status_code=503, detail="Model is not available.")
+    
     try:
-        # Convert the input list to a NumPy array for the model
         features_array = np.array(input_data.features)
-        
-        # Get predictions
         predictions = model.predict(features_array)
-        
-        # Return predictions in a JSON-friendly format
-        return {"predictions": predictions.tolist()}
+        return {"predictions": predictions.tolist(), "predicted_by": current_user.username}
     except Exception as e:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Error during prediction: {str(e)}"
-        )
-
+        raise HTTPException(status_code=400, detail=f"Error during prediction: {str(e)}")
