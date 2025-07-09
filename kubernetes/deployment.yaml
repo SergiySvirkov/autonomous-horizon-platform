@@ -1,0 +1,46 @@
+# kubernetes/deployment.yaml
+# This file defines the desired state for our MLOps API deployment in Kubernetes.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  # The name of the deployment
+  name: mlops-api-deployment
+  labels:
+    app: mlops-api
+spec:
+  # We want 2 replicas (instances) of our application running for high availability.
+  # Kubernetes will ensure that 2 pods are always running.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: mlops-api
+  template:
+    metadata:
+      labels:
+        app: mlops-api
+    spec:
+      containers:
+        - name: mlops-api-container
+          # IMPORTANT: Replace 'your-dockerhub-username/mlops-api:latest' with the actual path
+          # to your Docker image in a container registry (like Docker Hub, GCR, ECR).
+          image: your-dockerhub-username/mlops-api:latest
+          ports:
+            # The port that the container exposes (from our Dockerfile).
+            - containerPort: 80
+          env:
+            # Pass the MLflow Run ID as an environment variable.
+            # In a real setup, this would be managed by a CI/CD system or a config map.
+            - name: MLFLOW_RUN_ID
+              value: "<YOUR_PRODUCTION_RUN_ID>"
+            - name: MLFLOW_TRACKING_URI
+              # This should point to your production MLflow server, not the local 'mlruns' folder.
+              value: "http://mlflow-server.ml-system.svc.cluster.local:5000"
+          resources:
+            # Resource requests and limits are crucial for cluster stability.
+            requests:
+              memory: "256Mi"
+              cpu: "250m" # 25% of a CPU core
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
